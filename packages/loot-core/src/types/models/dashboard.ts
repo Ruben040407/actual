@@ -38,6 +38,13 @@ type AbstractWidget<
   tombstone: boolean;
 };
 
+export type NetWorthSeries = {
+  id: string;
+  name: string;
+  conditions: RuleConditionEntity[];
+  conditionsOp: 'and' | 'or';
+};
+
 export type NetWorthWidget = AbstractWidget<
   'net-worth-card',
   {
@@ -47,6 +54,10 @@ export type NetWorthWidget = AbstractWidget<
     timeFrame?: TimeFrame;
     interval?: 'Daily' | 'Weekly' | 'Monthly' | 'Yearly';
     mode?: 'trend' | 'stacked';
+    // Extra series drawn as lines next to the main one (which keeps using
+    // `conditions`/`conditionsOp` above, labelled `seriesName`).
+    seriesName?: string;
+    compareSeries?: NetWorthSeries[];
   } | null
 >;
 

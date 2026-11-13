@@ -17,11 +17,15 @@ import { PrivacyFilter } from '#components/PrivacyFilter';
 import { Change } from '#components/reports/Change';
 import { DateRange } from '#components/reports/DateRange';
 import { NetWorthGraph } from '#components/reports/graphs/NetWorthGraph';
+import { NetWorthOverlayGraph } from '#components/reports/graphs/NetWorthOverlayGraph';
 import { LoadingIndicator } from '#components/reports/LoadingIndicator';
 import { ReportCard } from '#components/reports/ReportCard';
 import { ReportCardName } from '#components/reports/ReportCardName';
 import { calculateTimeRange } from '#components/reports/reportRanges';
-import { createSpreadsheet as netWorthSpreadsheet } from '#components/reports/spreadsheets/net-worth-spreadsheet';
+import {
+  createNetWorthReport,
+  PRIMARY_SERIES_ID,
+} from '#components/reports/spreadsheets/net-worth-series';
 import { useReport } from '#components/reports/useReport';
 import { useDateFormat } from '#hooks/useDateFormat';
 import { useFormat } from '#hooks/useFormat';
@@ -73,14 +77,21 @@ export function NetWorthCard({
   const onCardHover = useCallback(() => setIsCardHovered(true), []);
   const onCardHoverEnd = useCallback(() => setIsCardHovered(false), []);
 
+  const compareSeries = meta?.compareSeries;
   const params = useMemo(
     () =>
-      netWorthSpreadsheet(
+      createNetWorthReport(
+        [
+          {
+            id: PRIMARY_SERIES_ID,
+            conditions: meta?.conditions ?? [],
+            conditionsOp: meta?.conditionsOp ?? 'and',
+          },
+          ...(compareSeries ?? []),
+        ],
         start,
         end,
         accounts,
-        meta?.conditions,
-        meta?.conditionsOp,
         locale,
         meta?.interval || 'Monthly',
         firstDayOfWeekIdx,
@@ -93,6 +104,7 @@ export function NetWorthCard({
       accounts,
       meta?.conditions,
       meta?.conditionsOp,
+      compareSeries,
       locale,
       meta?.interval,
       firstDayOfWeekIdx,
@@ -100,7 +112,15 @@ export function NetWorthCard({
       dateFormat,
     ],
   );
-  const data = useReport('net_worth', params);
+  const report = useReport('net_worth', params);
+  const data = report?.primary;
+  const seriesLabels = [
+    { id: PRIMARY_SERIES_ID, name: meta?.seriesName || t('Net worth') },
+    ...(compareSeries ?? []).map(({ id, name }, index) => ({
+      id,
+      name: name || t('Series {{number}}', { number: index + 2 }),
+    })),
+  ];
 
   return (
     <ReportCard
@@ -153,7 +173,16 @@ export function NetWorthCard({
           )}
         </View>
 
-        {data ? (
+        {report?.overlay ? (
+          <NetWorthOverlayGraph
+            data={report.overlay}
+            series={seriesLabels}
+            compact
+            showTooltip={!isEditing && !isNarrowWidth}
+            interval={meta?.interval || 'Monthly'}
+            style={{ height: 'auto', flex: 1 }}
+          />
+        ) : data ? (
           <NetWorthGraph
             graphData={data.graphData}
             accounts={data.accounts}

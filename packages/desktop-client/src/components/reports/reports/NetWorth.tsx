@@ -10,7 +10,7 @@ import { useParams } from 'react-router';
 
 import { Button } from '@actual-app/components/button';
 import { useResponsive } from '@actual-app/components/hooks/useResponsive';
-import { SvgCalendar, SvgChart } from '@actual-app/components/icons/v1';
+import { SvgAdd, SvgCalendar, SvgChart } from '@actual-app/components/icons/v1';
 import { Menu } from '@actual-app/components/menu';
 import { Paragraph } from '@actual-app/components/paragraph';
 import { Popover } from '@actual-app/components/popover';
@@ -21,6 +21,7 @@ import { send } from '@actual-app/core/platform/client/connection';
 import * as monthUtils from '@actual-app/core/shared/months';
 import type { NetWorthWidget, TimeFrame } from '@actual-app/core/types/models';
 import * as d from 'date-fns';
+import { v4 as uuidv4 } from 'uuid';
 
 import { EditablePageHeaderTitle } from '#components/EditablePageHeaderTitle';
 import { FinancialText } from '#components/FinancialText';
@@ -29,11 +30,19 @@ import { MobilePageHeader, Page, PageHeader } from '#components/Page';
 import { PrivacyFilter } from '#components/PrivacyFilter';
 import { Change } from '#components/reports/Change';
 import { NetWorthGraph } from '#components/reports/graphs/NetWorthGraph';
+import { NetWorthOverlayGraph } from '#components/reports/graphs/NetWorthOverlayGraph';
 import { Header } from '#components/reports/Header';
 import { LoadingIndicator } from '#components/reports/LoadingIndicator';
+import { NetWorthSeriesRow } from '#components/reports/NetWorthSeriesRow';
 import { ReportOptions } from '#components/reports/ReportOptions';
 import { calculateTimeRange } from '#components/reports/reportRanges';
-import { createSpreadsheet as netWorthSpreadsheet } from '#components/reports/spreadsheets/net-worth-spreadsheet';
+import {
+  createNetWorthReport,
+  getSeriesColor,
+  MAX_NET_WORTH_SERIES,
+  PRIMARY_SERIES_ID,
+} from '#components/reports/spreadsheets/net-worth-series';
+import type { NetWorthSeriesFilter } from '#components/reports/spreadsheets/net-worth-series';
 import { useReport } from '#components/reports/useReport';
 import { fromDateRepr } from '#components/reports/util';
 import { useAccounts } from '#hooks/useAccounts';
@@ -95,6 +104,46 @@ function NetWorthInner({ widget }: NetWorthInnerProps) {
     widget?.meta?.conditionsOp,
   );
 
+  // Names are kept apart from the filters so renaming doesn't reload data.
+  const [compareFilters, setCompareFilters] = useState<NetWorthSeriesFilter[]>(
+    () =>
+      (widget?.meta?.compareSeries ?? []).map(
+        ({ id, conditions, conditionsOp }) => ({
+          id,
+          conditions,
+          conditionsOp,
+        }),
+      ),
+  );
+  const [seriesNames, setSeriesNames] = useState<Record<string, string>>(() =>
+    Object.fromEntries([
+      [PRIMARY_SERIES_ID, widget?.meta?.seriesName ?? ''],
+      ...(widget?.meta?.compareSeries ?? []).map(({ id, name }) => [id, name]),
+    ]),
+  );
+  const isComparing = compareFilters.length > 0;
+  const seriesLabels = [
+    {
+      id: PRIMARY_SERIES_ID,
+      name: seriesNames[PRIMARY_SERIES_ID] || t('Net worth'),
+    },
+    ...compareFilters.map(({ id }, index) => ({
+      id,
+      name: seriesNames[id] || t('Series {{number}}', { number: index + 2 }),
+    })),
+  ];
+
+  function onAddSeries() {
+    setCompareFilters(series => [
+      ...series,
+      { id: uuidv4(), conditions: [], conditionsOp: 'and' },
+    ]);
+  }
+
+  function onRemoveSeries(id: string) {
+    setCompareFilters(series => series.filter(s => s.id !== id));
+  }
+
   const [allMonths, setAllMonths] = useState<Array<{
     name: string;
     pretty: string;
@@ -129,12 +178,14 @@ function NetWorthInner({ widget }: NetWorthInnerProps) {
 
   const reportParams = useMemo(
     () =>
-      netWorthSpreadsheet(
+      createNetWorthReport(
+        [
+          { id: PRIMARY_SERIES_ID, conditions, conditionsOp },
+          ...compareFilters,
+        ],
         start,
         end,
         accounts,
-        conditions,
-        conditionsOp,
         locale,
         interval,
         firstDayOfWeekIdx,
@@ -147,6 +198,7 @@ function NetWorthInner({ widget }: NetWorthInnerProps) {
       accounts,
       conditions,
       conditionsOp,
+      compareFilters,
       locale,
       interval,
       firstDayOfWeekIdx,
@@ -154,7 +206,7 @@ function NetWorthInner({ widget }: NetWorthInnerProps) {
       dateFormat,
     ],
   );
-  const data = useReport('net_worth', reportParams);
+  const report = useReport('net_worth', reportParams);
   useEffect(() => {
     async function run() {
       const earliestTransaction = await send('get-earliest-transaction');
@@ -243,6 +295,11 @@ function NetWorthInner({ widget }: NetWorthInnerProps) {
             conditionsOp,
             interval,
             mode: graphMode,
+            seriesName: seriesNames[PRIMARY_SERIES_ID] ?? '',
+            compareSeries: compareFilters.map(series => ({
+              ...series,
+              name: seriesNames[series.id] ?? '',
+            })),
             timeFrame: {
               start,
               end,
@@ -287,9 +344,10 @@ function NetWorthInner({ widget }: NetWorthInnerProps) {
     });
   };
 
-  if (!allMonths || !data) {
+  if (!allMonths || !report) {
     return null;
   }
+  const data = report.primary;
 
   return (
     <Page
@@ -337,7 +395,15 @@ function NetWorthInner({ widget }: NetWorthInnerProps) {
         inlineContent={
           <>
             <IntervalSelector interval={interval} onChange={setInterval} />
-            <ModeSelector mode={graphMode} onChange={setGraphMode} />
+            {!isComparing && (
+              <ModeSelector mode={graphMode} onChange={setGraphMode} />
+            )}
+            {compareFilters.length < MAX_NET_WORTH_SERIES - 1 && (
+              <Button variant="bare" onPress={onAddSeries}>
+                <SvgAdd style={{ width: 10, height: 10, marginRight: 5 }} />
+                <Trans>Compare</Trans>
+              </Button>
+            )}
           </>
         }
       >
@@ -347,6 +413,48 @@ function NetWorthInner({ widget }: NetWorthInnerProps) {
           </Button>
         )}
       </Header>
+
+      {isComparing && (
+        <View style={{ padding: '0 20px 15px', flexShrink: 0 }}>
+          <NetWorthSeriesRow
+            series={{
+              name: seriesNames[PRIMARY_SERIES_ID] ?? '',
+              conditions,
+              conditionsOp,
+            }}
+            color={getSeriesColor(0)}
+            defaultName={seriesLabels[0].name}
+            showFilters={false}
+            onChange={({ name }) =>
+              setSeriesNames(names => ({ ...names, [PRIMARY_SERIES_ID]: name }))
+            }
+          />
+          {compareFilters.map((series, index) => (
+            <NetWorthSeriesRow
+              key={series.id}
+              series={{ ...series, name: seriesNames[series.id] ?? '' }}
+              color={getSeriesColor(index + 1)}
+              defaultName={seriesLabels[index + 1].name}
+              onChange={({ name, conditions, conditionsOp }) => {
+                setSeriesNames(names => ({ ...names, [series.id]: name }));
+                if (
+                  conditions !== series.conditions ||
+                  conditionsOp !== series.conditionsOp
+                ) {
+                  setCompareFilters(all =>
+                    all.map(s =>
+                      s.id === series.id
+                        ? { ...s, conditions, conditionsOp }
+                        : s,
+                    ),
+                  );
+                }
+              }}
+              onRemove={() => onRemoveSeries(series.id)}
+            />
+          ))}
+        </View>
+      )}
 
       <View
         style={{
@@ -378,13 +486,22 @@ function NetWorthInner({ widget }: NetWorthInnerProps) {
           </PrivacyFilter>
         </View>
 
-        <NetWorthGraph
-          graphData={data.graphData}
-          accounts={data.accounts}
-          showTooltip={!isNarrowWidth}
-          interval={interval}
-          mode={graphMode}
-        />
+        {report.overlay ? (
+          <NetWorthOverlayGraph
+            data={report.overlay}
+            series={seriesLabels}
+            showTooltip={!isNarrowWidth}
+            interval={interval}
+          />
+        ) : (
+          <NetWorthGraph
+            graphData={data.graphData}
+            accounts={data.accounts}
+            showTooltip={!isNarrowWidth}
+            interval={interval}
+            mode={graphMode}
+          />
+        )}
 
         <View style={{ marginTop: 30, userSelect: 'none' }}>
           <Paragraph>
